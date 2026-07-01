@@ -109,7 +109,7 @@ def process_mask_to_graph(image_bytes, bbox, bin_thresh, noise_max, hole_max, he
 # =========================================================
 # 3. UI LAYOUT
 # =========================================================
-st.title("🛰️ Route Resilience V2.0: Deep Extraction & Stress Test")
+st.title("Route Resilience V2.0: Deep Extraction & Stress Test")
 
 with st.sidebar:
     st.header("1. Calibration & Data")
@@ -130,7 +130,7 @@ with st.sidebar:
     merge_d = st.slider("Junction Merge Radius", 1, 50, 15)
     
     if file:
-        if st.button("🚀 Re-Extract Infrastructure", use_container_width=True):
+        if st.button(" Re-Extract Infrastructure", use_container_width=True):
             raw, heal, skel, G = process_mask_to_graph(file, bbox, bin_t, noise_m, hole_m, heal_d, merge_d)
             st.session_state.update({"raw": raw, "heal": heal, "skel": skel, "G_base": G, "G_curr": copy.deepcopy(G), 
                                     "eff_base": calculate_network_efficiency(G), "history": [1.0], "removed": 0})
@@ -138,7 +138,7 @@ with st.sidebar:
     st.divider()
     st.header("3. Simulation Controls")
     mode = st.radio("Ablation Strategy", ["Targeted (Gatekeepers)", "Random (Noise)"])
-    if st.button("🔥 Execute Ablation Step", type="primary", use_container_width=True):
+    if st.button(" Execute Ablation Step", type="primary", use_container_width=True):
         if 'G_curr' in st.session_state and len(st.session_state.G_curr) > 1:
             G_sim = st.session_state.G_curr
             target = identify_gatekeepers(G_sim)[0][0][0] if mode == "Targeted (Gatekeepers)" else random.choice(list(G_sim.nodes()))
@@ -148,7 +148,7 @@ with st.sidebar:
 
 # MAIN DASHBOARD
 if 'G_curr' in st.session_state:
-    st.subheader("🔍 Extraction Trace")
+    st.subheader("Extraction Trace")
     c1, c2, c3, c4 = st.columns(4)
     c1.image(st.session_state.raw, caption="1. Raw Mask", use_container_width=True)
     c2.image(st.session_state.heal, caption="2. Healed Mask", use_container_width=True)
