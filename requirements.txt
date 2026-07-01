@@ -3,3 +3,6 @@ networkx
 numpy
 folium
 streamlit-folium
+scikit-image
+sknw
+matplotlib
