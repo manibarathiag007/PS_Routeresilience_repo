@@ -8,10 +8,40 @@ from skimage import morphology, io
 import sknw
 import matplotlib.pyplot as plt
 import itertools
-import matplotlib.colors as mcolors
+import base64
+import io
+from PIL import Image
 from scipy.ndimage import distance_transform_edt
 
 # --- GRADIENT GENERATOR ---
+
+def get_safe_base64_overlay(binary_mask, centrality_map, graph):
+    """Safely converts map overlay to base64 for Folium."""
+    h, w = binary_mask.shape
+    nodes = list(graph.nodes)
+    node_coords = np.array([graph.nodes[n]['o'] for n in nodes])
+    centrality_vals = np.array([centrality_map.get(n, 0) for n in nodes])
+    
+    y_grid, x_grid = np.indices((h, w))
+    dist_sq = (x_grid[:, :, np.newaxis] - node_coords[:, 1])**2 + \
+              (y_grid[:, :, np.newaxis] - node_coords[:, 0])**2
+    nearest_node_idx = np.argmin(dist_sq, axis=2)
+    pixel_centrality = centrality_vals[nearest_node_idx]
+    
+    # Normalize
+    norm_centrality = (pixel_centrality - pixel_centrality.min()) / \
+                      (pixel_centrality.max() - pixel_centrality.min() + 1e-9)
+    
+    cmap = plt.get_cmap('coolwarm')
+    rgba_img = cmap(norm_centrality)
+    rgba_img[:, :, 3] = binary_mask * 0.7 
+    
+    # Convert to PIL then B64
+    img = Image.fromarray((rgba_img * 255).astype(np.uint8))
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+
 def get_gradient_overlay(binary_mask, centrality_map, graph):
     """Projects graph node centrality onto the spatial road mask."""
     h, w = binary_mask.shape
@@ -153,37 +183,22 @@ with st.sidebar:
             new_eff = calculate_network_efficiency(G_sim)
             st.session_state.history_r.append(new_eff / st.session_state.baseline_eff)
 
-if 'current_graph' in st.session_state:
-    gatekeepers, centrality_map = identify_gatekeepers(st.session_state.current_graph)
+if 'current_graph' not in st.session_state:
+    st.info("Please upload a mask in the sidebar.")
+else:
+    # Safe retrieval
+    G = st.session_state.current_graph
+    mask = st.session_state.raw_mask
+    _, centrality_map = identify_gatekeepers(G)
     
-    # 1. Setup Map Bounds
-    if use_real_bounds and bounds_dict:
-        img_bounds = [[bounds_dict['br_lat'], bounds_dict['tl_lon']], [bounds_dict['tl_lat'], bounds_dict['br_lon']]]
-        map_center = [(bounds_dict['tl_lat'] + bounds_dict['br_lat'])/2, (bounds_dict['tl_lon'] + bounds_dict['br_lon'])/2]
-    else:
-        img_bounds = [[13.07, 80.26], [13.09, 80.28]]
-        map_center = [13.0827, 80.2707]
-
-    m = folium.Map(location=map_center, zoom_start=14, tiles="CartoDB dark_matter")
+    # Define bounds (Safe defaults)
+    bounds = [[13.07, 80.26], [13.09, 80.28]]
     
-    # 2. Add Gradient Overlay
-    overlay_img = get_gradient_overlay(st.session_state.raw_mask, centrality_map, st.session_state.current_graph)
-    folium.raster_layers.ImageOverlay(image=overlay_img, bounds=img_bounds, opacity=0.7).add_to(m)
-
-    # 3. Add Graph Nodes/Edges
-    for u, v, data in st.session_state.current_graph.edges(data=True):
-        pos_u = st.session_state.current_graph.nodes[u]['pos']
-        pos_v = st.session_state.current_graph.nodes[v]['pos']
-        folium.PolyLine([pos_u, pos_v], color="#ffffff", weight=1, opacity=0.4).add_to(m)
-        
-    for node, data in st.session_state.current_graph.nodes(data=True):
-        c_score = centrality_map.get(node, 0)
-        folium.CircleMarker(location=data['pos'], radius=2, color="white", fill=True).add_to(m)
-
-    col_map, col_chart = st.columns([2, 1])
-    with col_map:
-        st.markdown("### Structural Intelligence Heatmap")
-        st_folium(m, width=700, height=500)
-    with col_chart:
-        st.markdown("### Percolation Phase Transition")
-        st.line_chart(st.session_state.history_r)
+    m = folium.Map(location=[13.0827, 80.2707], zoom_start=14, tiles="CartoDB dark_matter")
+    
+    # Add Overlay using the safe serialization
+    b64_overlay = get_safe_base64_overlay(mask, centrality_map, G)
+    folium.raster_layers.ImageOverlay(image=b64_overlay, bounds=bounds, opacity=0.7).add_to(m)
+    
+    # Render
+    st_folium(m, width=700, height=500)
