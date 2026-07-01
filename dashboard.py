@@ -18,27 +18,27 @@ st.set_page_config(page_title="Route Resilience Pipeline", layout="wide", page_i
 # 1. CORE PHYSICS & TOPOLOGY ENGINE (The "Accelerator")
 # =========================================================
 def heal_islands(graph, distance_threshold, penalty_confidence=0.2):
-    """Bridges isolated subgraphs based on minimum Euclidean vectors."""
-    components = list(nx.connected_components(graph))
-    if len(components) <= 1: return graph
+    """Bridges isolated subgraphs based on minimum Euclidean vectors."""
+    components = list(nx.connected_components(graph))
+    if len(components) <= 1: return graph
 
-    for comp_a, comp_b in itertools.combinations(components, 2):
-        min_dist = float('inf')
-        best_pair = None
-        for u in comp_a:
-            for v in comp_b:
-                coord_u = graph.nodes[u]['o']
-                coord_v = graph.nodes[v]['o']
-                dist = np.linalg.norm(coord_u - coord_v)
-                if dist < min_dist:
-                    min_dist = dist
-                    best_pair = (u, v)
+    for comp_a, comp_b in itertools.combinations(components, 2):
+        min_dist = float('inf')
+        best_pair = None
+        for u in comp_a:
+            for v in comp_b:
+                coord_u = graph.nodes[u]['o']
+                coord_v = graph.nodes[v]['o']
+                dist = np.linalg.norm(coord_u - coord_v)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_pair = (u, v)
 
-        if best_pair and min_dist < distance_threshold:
-            u, v = best_pair
-            eff_weight = min_dist / penalty_confidence
-            graph.add_edge(u, v, weight=min_dist, confidence=penalty_confidence, eff_weight=eff_weight)
-    return graph
+        if best_pair and min_dist < distance_threshold:
+            u, v = best_pair
+            eff_weight = min_dist / penalty_confidence
+            graph.add_edge(u, v, weight=min_dist, confidence=penalty_confidence, eff_weight=eff_weight)
+    return graph
 
 def merge_close_junctions(graph, merge_threshold):
     """Contracts microscopic artifact nodes into single centers of mass."""
