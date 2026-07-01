@@ -100,7 +100,9 @@ def identify_gatekeepers(graph, weight_attr='eff_weight'):
     except: return [], {}
 
 def process_mask_to_graph(image_bytes, road_width_px, bounds=None):
-    raw_image = io.imread(image_bytes, as_gray=True)
+    raw_image = io.imread(io.BytesIO(image_bytes.getvalue()), as_gray=True)
+    # ---------------------------
+    
     binary_mask = raw_image > 0.1
     image_h, image_w = binary_mask.shape
     skeleton = morphology.skeletonize(morphology.remove_small_objects(binary_mask, 50))
