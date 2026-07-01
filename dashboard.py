@@ -76,11 +76,12 @@ def identify_gatekeepers(graph, weight_attr='eff_weight'):
 # =========================================================
 # 2. DATA PIPELINE (Pixel Mask -> Geospatial Graph)
 # =========================================================
-def process_mask_to_graph(image_bytes, road_width_px):
+def process_mask_to_graph(image_bytes, road_width_px, bounds=None):
     """Converts a raw image into a fully healed, geospatial NetworkX graph."""
     # 1. Load and Binarize
     raw_image = io.imread(image_bytes, as_gray=True)
     binary_mask = raw_image > 0.1
+    image_h, image_w = binary_mask.shape
     
     # 2. Morphological Cleaning
     noise_area = int((road_width_px ** 2) * 2)
@@ -100,16 +101,25 @@ def process_mask_to_graph(image_bytes, road_width_px):
     graph = heal_islands(graph, distance_threshold=road_width_px * 20)
     graph = merge_close_junctions(graph, merge_threshold=road_width_px * 1.5)
     
-    # 5. Coordinate Projection (Pixels -> Pseudo-Geospatial Lat/Lon)
-    # We map the pixels to a real-world location (e.g., Chennai) so Folium can render it
-    base_lat, base_lon = 13.0827, 80.2707 
-    scale_factor = 0.00005 # How much map space a pixel takes up
-    
+    # 5. Coordinate Projection (Linear Space Transformation)
     for n, data in graph.nodes(data=True):
-        if 'o' in data: # 'o' is the [row, col] pixel coordinate from sknw
+        if 'o' in data:
             row, col = data['o']
-            # Row increases downwards, so we subtract from Latitude
-            graph.nodes[n]['pos'] = (base_lat - (row * scale_factor), base_lon + (col * scale_factor))
+            
+            if bounds:
+                # Real geospatial mapping via linear interpolation
+                lat_span = bounds['tl_lat'] - bounds['br_lat']
+                lon_span = bounds['br_lon'] - bounds['tl_lon']
+                
+                # Row 0 is Top (North/Max Lat). Col 0 is Left (West/Min Lon)
+                lat = bounds['tl_lat'] - (row / image_h) * lat_span
+                lon = bounds['tl_lon'] + (col / image_w) * lon_span
+                graph.nodes[n]['pos'] = (lat, lon)
+            else:
+                # Fallback: Pseudo-Geospatial mapping (Arbitrary scale near Chennai)
+                base_lat, base_lon = 13.0827, 80.2707 
+                scale_factor = 0.00005 
+                graph.nodes[n]['pos'] = (base_lat - (row * scale_factor), base_lon + (col * scale_factor))
             
     return binary_mask, skeleton, graph
 
@@ -125,26 +135,40 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Upload Binary Mask (PNG/JPG)", type=['png', 'jpg', 'jpeg'])
     road_width = st.slider("Estimated Road Width (px)", min_value=5, max_value=50, value=15)
     
+    st.divider()
+    st.header("2. Geospatial Alignment")
+    use_real_bounds = st.checkbox("Use Real Geographic Bounds")
+    bounds_dict = None
+    
+    if use_real_bounds:
+        st.markdown("<small>Enter Bounding Box Coordinates (Dec. Degrees):</small>", unsafe_allow_html=True)
+        tl_lat = st.number_input("Top-Left Lat (North)", value=13.09000, format="%.5f")
+        tl_lon = st.number_input("Top-Left Lon (West)", value=80.26000, format="%.5f")
+        br_lat = st.number_input("Bottom-Right Lat (South)", value=13.07000, format="%.5f")
+        br_lon = st.number_input("Bottom-Right Lon (East)", value=80.29000, format="%.5f")
+        bounds_dict = {'tl_lat': tl_lat, 'tl_lon': tl_lon, 'br_lat': br_lat, 'br_lon': br_lon}
+    else:
+        st.caption("Using arbitrary pseudo-coordinates for testing.")
+    
     if uploaded_file is not None:
-        # Check if this is a newly uploaded file to avoid reprocessing on every click
-        if st.session_state.get('last_uploaded') != uploaded_file.name:
+        # Check if file OR bounds changed to trigger re-run
+        current_state_id = f"{uploaded_file.name}_{use_real_bounds}_{bounds_dict}"
+        if st.session_state.get('last_run_state') != current_state_id:
             with st.spinner("Executing Mathematical Extraction..."):
-                mask, skeleton, G = process_mask_to_graph(uploaded_file, road_width)
+                mask, skeleton, G = process_mask_to_graph(uploaded_file, road_width, bounds=bounds_dict)
                 
-                # Save the real extracted graph to session state
                 st.session_state.baseline_graph = G
                 st.session_state.current_graph = copy.deepcopy(G)
                 st.session_state.baseline_eff = calculate_network_efficiency(G)
                 st.session_state.history_r = [1.0] 
                 st.session_state.nodes_removed = 0
-                st.session_state.last_uploaded = uploaded_file.name
+                st.session_state.last_run_state = current_state_id
                 
-                # Save images for display
                 st.session_state.raw_mask = mask
                 st.session_state.skeleton = skeleton
 
     st.divider()
-    st.header("2. Simulation Controls")
+    st.header("3. Simulation Controls")
     if st.button("🚨 Ablate Top Gatekeeper Node", use_container_width=True) and 'current_graph' in st.session_state:
         G_sim = st.session_state.current_graph
         if len(G_sim) > 1:
@@ -167,27 +191,37 @@ with st.sidebar:
 # --- MAIN DASHBOARD (Only shows if file is uploaded) ---
 if 'current_graph' in st.session_state:
     
-    # -- Phase I & II: Extraction Visualization --
     with st.expander("🔍 View Extraction Pipeline (Mask -> Skeleton -> Graph)", expanded=False):
         c1, c2 = st.columns(2)
         c1.image(st.session_state.raw_mask, caption="Raw Binary Mask", use_container_width=True)
         c2.image(st.session_state.skeleton, caption="Healed Topological Skeleton", use_container_width=True, clamp=True)
         
-    # -- Phase III: System Metrics --
     col1, col2, col3 = st.columns(3)
     current_r = st.session_state.history_r[-1]
     col1.metric("Resilience Index (R)", f"{current_r:.3f}", f"{(current_r - 1.0)*100:.1f}%")
     col2.metric("Nodes Ablated (Destroyed)", st.session_state.nodes_removed)
     col3.metric("Remaining Network Size", len(st.session_state.current_graph.nodes))
 
-    # -- Map Preparation --
     gatekeepers, centrality_map = identify_gatekeepers(st.session_state.current_graph)
     
     all_lats = [data['pos'][0] for n, data in st.session_state.current_graph.nodes(data=True) if 'pos' in data]
     all_lons = [data['pos'][1] for n, data in st.session_state.current_graph.nodes(data=True) if 'pos' in data]
-    map_center = [np.mean(all_lats), np.mean(all_lons)] if all_lats else [13.0827, 80.2707]
+    
+    # Check if we have valid bounding coordinates to frame the map correctly
+    if use_real_bounds and bounds_dict:
+        # Fit bounds to the user-provided geospatial window
+        map_center = [(bounds_dict['tl_lat'] + bounds_dict['br_lat'])/2, (bounds_dict['tl_lon'] + bounds_dict['br_lon'])/2]
+    else:
+        map_center = [np.mean(all_lats), np.mean(all_lons)] if all_lats else [13.0827, 80.2707]
 
     m = folium.Map(location=map_center, zoom_start=14, tiles="CartoDB dark_matter")
+    
+    # If using real bounds, draw a subtle bounding box to show the exact satellite footprint
+    if use_real_bounds and bounds_dict:
+        folium.Rectangle(
+            bounds=[[bounds_dict['br_lat'], bounds_dict['tl_lon']], [bounds_dict['tl_lat'], bounds_dict['br_lon']]],
+            color='#ffffff', weight=1, fill=False, opacity=0.3
+        ).add_to(m)
 
     for u, v, data in st.session_state.current_graph.edges(data=True):
         if 'pos' in st.session_state.current_graph.nodes[u] and 'pos' in st.session_state.current_graph.nodes[v]:
@@ -211,7 +245,6 @@ if 'current_graph' in st.session_state:
                 popup=f"Node: {node}<br>Centrality: {c_score:.4f}"
             ).add_to(m)
 
-    # -- Render Heatmap and Chart --
     col_map, col_chart = st.columns([2, 1])
     with col_map:
         st.markdown("### Structural Intelligence Heatmap")
