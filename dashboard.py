@@ -60,9 +60,13 @@ def identify_gatekeepers(graph):
 # =========================================================
 # 2. DATA PIPELINE (The Trace Extraction Engine)
 # =========================================================
+# =========================================================
+# 2. DATA PIPELINE (The Trace Extraction Engine)
+# =========================================================
 def process_mask_to_graph(image_bytes, bbox, bin_thresh, noise_max, hole_max, heal_dist, merge_dist):
     # 1. Raw Mask Stage
-    raw_img = io.imread(image_bytes, as_gray=True)
+    raw_img_pil = Image.open(image_bytes).convert('L')
+    raw_img = np.array(raw_img_pil) / 255.0
     raw_mask = raw_img > bin_thresh
     
     # 2. Healed Mask Stage
@@ -90,7 +94,12 @@ def process_mask_to_graph(image_bytes, bbox, bin_thresh, noise_max, hole_max, he
             row, col = data['o']
             graph.nodes[n]['pos'] = (bbox['lat_max'] - (row * d_lat), bbox['lon_min'] + (col * d_lon))
             
-    return raw_mask, healed_mask, skeleton, graph
+    # FIX: Convert boolean arrays to 0-255 uint8 images for Streamlit rendering
+    disp_raw = (raw_mask * 255).astype(np.uint8)
+    disp_heal = (healed_mask * 255).astype(np.uint8)
+    disp_skel = (skeleton * 255).astype(np.uint8)
+            
+    return disp_raw, disp_heal, disp_skel, graph
 
 # =========================================================
 # 3. UI LAYOUT
