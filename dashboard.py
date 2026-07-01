@@ -53,19 +53,19 @@ def merge_close_junctions(graph, merge_threshold):
     return graph
 
 def calculate_network_efficiency(graph, weight_attr='eff_weight'):
-    """Calculates global efficiency: E = 1/(N(N-1)) * sum(1/d_uv)"""
-    n = len(graph)
-    if n < 2: return 0.0
-    efficiency = 0.0
-    paths = dict(nx.all_pairs_dijkstra_path_length(graph, weight=weight_attr))
-    for u in graph:
-        for v in graph:
-            if u != v:
-                try:
-                    dist = paths[u][v]
-                    if dist > 0: efficiency += 1.0 / dist
-                except KeyError: pass
-    return efficiency / (n * (n - 1))
+    """Calculates global efficiency: E = 1/(N(N-1)) * sum(1/d_uv)"""
+    n = len(graph)
+    if n < 2: return 0.0
+    efficiency = 0.0
+    paths = dict(nx.all_pairs_dijkstra_path_length(graph, weight=weight_attr))
+    for u in graph:
+        for v in graph:
+            if u != v:
+                try:
+                    dist = paths[u][v]
+                    if dist > 0: efficiency += 1.0 / dist
+                except KeyError: pass
+    return efficiency / (n * (n - 1))
 
 def identify_gatekeepers(graph, weight_attr='eff_weight'):
     """Calculates betweenness centrality to identify bottlenecks."""
