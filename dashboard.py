@@ -41,16 +41,16 @@ def heal_islands(graph, distance_threshold, penalty_confidence=0.2):
     return graph
 
 def merge_close_junctions(graph, merge_threshold):
-    """Contracts microscopic artifact nodes into single centers of mass."""
-    undirected_graph = graph.to_undirected()
-    nodes_to_merge = set()
-    for u, v, data in undirected_graph.edges(data=True):
-        if 'weight' in data and data['weight'] < merge_threshold:
-            nodes_to_merge.add((u, v))
-    for u, v in nodes_to_merge:
-        if graph.has_node(u) and graph.has_node(v):
-            graph = nx.contracted_nodes(graph, u, v, self_loops=False)
-    return graph
+    """Contracts microscopic artifact nodes into single centers of mass."""
+    undirected_graph = graph.to_undirected()
+    nodes_to_merge = set()
+    for u, v, data in undirected_graph.edges(data=True):
+        if 'weight' in data and data['weight'] < merge_threshold:
+            nodes_to_merge.add((u, v))
+    for u, v in nodes_to_merge:
+        if graph.has_node(u) and graph.has_node(v):
+            graph = nx.contracted_nodes(graph, u, v, self_loops=False)
+    return graph
 
 def calculate_network_efficiency(graph, weight_attr='eff_weight'):
     """Calculates global efficiency: E = 1/(N(N-1)) * sum(1/d_uv)"""
