@@ -169,56 +169,58 @@ if 'G_curr' in st.session_state:
         st.markdown("### Heatmap")
         gates, c_map = identify_gatekeepers(st.session_state.G_curr)
         
-        # 1. Base Map
+        # 1. Base Map & Dark Mode
         m = folium.Map(location=[(bbox['lat_max']+bbox['lat_min'])/2, (bbox['lon_max']+bbox['lon_min'])/2], zoom_start=15, tiles="OpenStreetMap")
         
-        # 2. Dark Mode CSS Injection
         dark_mode_css = """
         <style>
-        .leaflet-tile {
-            filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
-        }
+        .leaflet-tile { filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%); }
         </style>
         """
         m.get_root().html.add_child(folium.Element(dark_mode_css))
         
-        # 3. Create Transparent RGBA Overlay from the Healed Mask
-        # Get the 2D display array (0 for background, 255 for roads)
-        heal_img = st.session_state.heal
-        H, W = heal_img.shape
+        # 2. Establish the Scalar Field Boundaries
+        import branca.colormap as cm
+        max_c = max(c_map.values()) if c_map else 1.0
+        if max_c == 0: max_c = 1.0
+        colormap = cm.LinearColormap(colors=['blue', 'purple', 'red'], vmin=0.0, vmax=max_c)
         
-        # Initialize an empty RGBA array (all zeros = fully transparent black)
-        rgba_overlay = np.zeros((H, W, 4), dtype=np.uint8)
-        
-        # Find where the roads are and set them to White [255, 255, 255] with an Alpha (opacity) of 200
-        road_pixels = heal_img > 0
-        rgba_overlay[road_pixels] = [255, 255, 255, 200] 
-        
-        # Define the geospatial boundaries for the image
-        img_bounds = [[bbox['lat_min'], bbox['lon_min']], [bbox['lat_max'], bbox['lon_max']]]
-        
-        # Add the image overlay to the map
-        folium.raster_layers.ImageOverlay(
-            image=rgba_overlay,
-            bounds=img_bounds,
-            interactive=False,
-            cross_origin=False,
-            zindex=1
-        ).add_to(m)
+        # 3. Recalculate Geodetic Differentials for the sub-paths
+        H, W = st.session_state.heal.shape
+        d_lat = (bbox['lat_max'] - bbox['lat_min']) / H
+        d_lon = (bbox['lon_max'] - bbox['lon_min']) / W
+
+        # 4. Draw the Vectorized Gradient Field
+        for u, v, d in st.session_state.G_curr.edges(data=True):
+            if 'pos' not in st.session_state.G_curr.nodes[u] or 'pos' not in st.session_state.G_curr.nodes[v]:
+                continue
                 
-        # 4. Draw Nodes (Gatekeepers) over the mask
-        # 4. Draw Nodes (Gatekeepers) over the mask
-        for n, d in st.session_state.G_curr.nodes(data=True):
-            if 'pos' in d:
-                score = c_map.get(n, 0)
-                folium.CircleMarker(
-                    d['pos'], 
-                    radius=3+(score*30), 
-                    color="red" if score*5>1 else "blue", 
-                    fill=True,
-                    fill_opacity=0.2,  # Restored to the translucent look
-                    opacity=0.8        # Keeps the outer border just sharp enough
+            c_u, c_v = c_map.get(u, 0), c_map.get(v, 0)
+            
+            # Fetch the precise curvilinear pixel path, fallback to straight line if it's a healed bridge
+            pts = d.get('pts', [st.session_state.G_curr.nodes[u]['o'], st.session_state.G_curr.nodes[v]['o']])
+                
+            lats_lons = [
+                (bbox['lat_max'] - (row * d_lat), bbox['lon_min'] + (col * d_lon)) 
+                for row, col in pts
+            ]
+            
+            num_pts = len(lats_lons)
+            if num_pts > 1:
+                # Interpolate the structural stress smoothly across the path
+                c_values = np.linspace(c_u, c_v, num_pts)
+                
+                folium.features.ColorLine(
+                    positions=lats_lons,
+                    colors=c_values,
+                    colormap=colormap,
+                    weight=7,       # Thick enough to look like the road mask
+                    opacity=0.9
                 ).add_to(m)
+                
+        # Optional: Add the heat legend to the map
+        colormap.caption = 'Structural Betweenness Centrality'
+        colormap.add_to(m)
                 
         st_folium(m, width=700, height=500)
     with c_col:
