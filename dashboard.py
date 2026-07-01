@@ -10,223 +10,157 @@ import random
 import itertools
 
 # =========================================================
-# 0. INITIALIZE UI FIRST
+# 0. INITIALIZE UI
 # =========================================================
-st.set_page_config(page_title="Route Resilience Pipeline", layout="wide", page_icon="🛰️")
+st.set_page_config(page_title="Route Resilience V2.0", layout="wide", page_icon="🛰️")
 
 # =========================================================
 # 1. CORE PHYSICS & TOPOLOGY ENGINE
 # =========================================================
 def heal_islands(graph, distance_threshold, penalty_confidence=0.2):
-    """Bridges isolated subgraphs based on minimum Euclidean vectors."""
     components = list(nx.connected_components(graph))
     if len(components) <= 1: return graph
-
     for comp_a, comp_b in itertools.combinations(components, 2):
         min_dist = float('inf')
         best_pair = None
         for u in comp_a:
             for v in comp_b:
-                coord_u = graph.nodes[u]['o']
-                coord_v = graph.nodes[v]['o']
+                coord_u, coord_v = graph.nodes[u]['o'], graph.nodes[v]['o']
                 dist = np.linalg.norm(coord_u - coord_v)
-                if dist < min_dist:
-                    min_dist = dist
-                    best_pair = (u, v)
-
+                if dist < min_dist: min_dist, best_pair = dist, (u, v)
         if best_pair and min_dist < distance_threshold:
             u, v = best_pair
-            eff_weight = min_dist / penalty_confidence
-            graph.add_edge(u, v, weight=min_dist, confidence=penalty_confidence, eff_weight=eff_weight)
+            graph.add_edge(u, v, weight=min_dist, confidence=penalty_confidence, eff_weight=min_dist/penalty_confidence)
     return graph
 
 def merge_close_junctions(graph, merge_threshold):
-    """Contracts microscopic artifact nodes into single centers of mass."""
-    undirected_graph = graph.to_undirected()
-    nodes_to_merge = set()
-    for u, v, data in undirected_graph.edges(data=True):
-        if 'weight' in data and data['weight'] < merge_threshold:
-            nodes_to_merge.add((u, v))
-    for u, v in nodes_to_merge:
-        if graph.has_node(u) and graph.has_node(v):
-            graph = nx.contracted_nodes(graph, u, v, self_loops=False)
+    undirected = graph.to_undirected()
+    for u, v, d in list(undirected.edges(data=True)):
+        if d.get('weight', 999) < merge_threshold:
+            if graph.has_node(u) and graph.has_node(v):
+                graph = nx.contracted_nodes(graph, u, v, self_loops=False)
     return graph
 
-def calculate_network_efficiency(graph, weight_attr='eff_weight'):
-    """Calculates global efficiency: E = 1/(N(N-1)) * sum(1/d_uv)"""
+def calculate_network_efficiency(graph):
     n = len(graph)
     if n < 2: return 0.0
     efficiency = 0.0
-    paths = dict(nx.all_pairs_dijkstra_path_length(graph, weight=weight_attr))
+    paths = dict(nx.all_pairs_dijkstra_path_length(graph, weight='eff_weight'))
     for u in graph:
         for v in graph:
             if u != v:
-                try:
-                    dist = paths[u][v]
-                    if dist > 0: efficiency += 1.0 / dist
-                except KeyError: pass
+                dist = paths[u].get(v, 0)
+                if dist > 0: efficiency += 1.0 / dist
     return efficiency / (n * (n - 1))
 
-def identify_gatekeepers(graph, weight_attr='eff_weight'):
-    """Calculates betweenness centrality to identify bottlenecks."""
-    node_centrality = nx.betweenness_centrality(graph, weight=weight_attr)
-    sorted_nodes = sorted(node_centrality.items(), key=lambda x: x[1], reverse=True)
-    return sorted_nodes, node_centrality
+def identify_gatekeepers(graph):
+    centrality = nx.betweenness_centrality(graph, weight='eff_weight')
+    return sorted(centrality.items(), key=lambda x: x[1], reverse=True), centrality
 
 # =========================================================
-# 2. DATA PIPELINE (Geospatial Mapping)
+# 2. DATA PIPELINE (The Trace Extraction Engine)
 # =========================================================
-def process_mask_to_graph(image_bytes, road_width_px, bbox):
-    """Converts a raw image into a fully healed, accurately georeferenced graph."""
-    raw_image = io.imread(image_bytes, as_gray=True)
-    binary_mask = raw_image > 0.1
+def process_mask_to_graph(image_bytes, bbox, bin_thresh, noise_max, hole_max, heal_dist, merge_dist):
+    # 1. Raw Mask Stage
+    raw_img = io.imread(image_bytes, as_gray=True)
+    raw_mask = raw_img > bin_thresh
     
-    noise_area = int((road_width_px ** 2) * 2)
-    clean_mask = morphology.remove_small_objects(binary_mask, max_size=noise_area)
-    clean_mask = morphology.remove_small_holes(clean_mask, max_size=noise_area)
+    # 2. Healed Mask Stage
+    clean_mask = morphology.remove_small_objects(raw_mask, max_size=noise_max)
+    healed_mask = morphology.remove_small_holes(clean_mask, max_size=hole_max)
     
-    skeleton = morphology.skeletonize(clean_mask)
+    # 3. Skeleton Stage
+    skeleton = morphology.skeletonize(healed_mask)
+    
+    # 4. Vector Graph Stage
     graph = sknw.build_sknw(skeleton)
-    
     for u, v, data in graph.edges(data=True):
         data['confidence'] = 1.0
-        data['eff_weight'] = data['weight'] / data['confidence']
+        data['eff_weight'] = data['weight']
         
-    graph = heal_islands(graph, distance_threshold=road_width_px * 20)
-    graph = merge_close_junctions(graph, merge_threshold=road_width_px * 1.5)
+    graph = heal_islands(graph, distance_threshold=heal_dist)
+    graph = merge_close_junctions(graph, merge_threshold=merge_dist)
     
-    # Exact Georeferencing via Affine Transformation
-    H, W = binary_mask.shape
+    # Affine Mapping (Pixels -> Geodetic)
+    H, W = healed_mask.shape
     d_lat = (bbox['lat_max'] - bbox['lat_min']) / H
     d_lon = (bbox['lon_max'] - bbox['lon_min']) / W
-    
     for n, data in graph.nodes(data=True):
-        if 'o' in data: 
+        if 'o' in data:
             row, col = data['o']
-            exact_lat = bbox['lat_max'] - (row * d_lat)
-            exact_lon = bbox['lon_min'] + (col * d_lon)
-            graph.nodes[n]['pos'] = (exact_lat, exact_lon)
+            graph.nodes[n]['pos'] = (bbox['lat_max'] - (row * d_lat), bbox['lon_min'] + (col * d_lon))
             
-    return binary_mask, skeleton, graph
+    return raw_mask, healed_mask, skeleton, graph
 
 # =========================================================
-# 3. INTERACTIVE DASHBOARD UI
+# 3. UI LAYOUT
 # =========================================================
-st.title("🛰️ Route Resilience: Geospatial Extraction & Stress Test")
-st.markdown("Bharatiya Antariksh Hackathon 2026 | **From Pixel Mask to Percolation Phase Transition**")
+st.title("🛰️ Route Resilience V2.0: Deep Extraction & Stress Test")
 
 with st.sidebar:
     st.header("1. Calibration & Data")
+    bbox = {
+        'lat_max': st.number_input("Lat Max", value=13.0980, format="%.4f"),
+        'lat_min': st.number_input("Lat Min", value=13.0919, format="%.4f"),
+        'lon_min': st.number_input("Lon Min", value=80.1001, format="%.4f"),
+        'lon_max': st.number_input("Lon Max", value=80.1101, format="%.4f")
+    }
+    file = st.file_uploader("Upload Mask", type=['png', 'jpg'])
     
-    st.subheader("Map Bounding Box")
-    lat_max = st.number_input("Lat Max (North)", value=13.1400, format="%.4f")
-    lat_min = st.number_input("Lat Min (South)", value=13.0800, format="%.4f")
-    lon_min = st.number_input("Lon Min (West)", value=80.0800, format="%.4f")
-    lon_max = st.number_input("Lon Max (East)", value=80.1400, format="%.4f")
+    st.divider()
+    st.header("2. Hyperparameter Tuning")
+    bin_t = st.slider("Binarization Threshold", 0.0, 1.0, 0.1)
+    noise_m = st.slider("Noise Cleaning Area (px)", 10, 1000, 200)
+    hole_m = st.slider("Hole Filling Area (px)", 10, 1000, 200)
+    heal_d = st.slider("Island Bridge Distance", 5, 200, 50)
+    merge_d = st.slider("Junction Merge Radius", 1, 50, 15)
     
-    bbox = {'lat_min': lat_min, 'lat_max': lat_max, 'lon_min': lon_min, 'lon_max': lon_max}
-    
-    uploaded_file = st.file_uploader("Upload Binary Mask (PNG/JPG)", type=['png', 'jpg', 'jpeg'])
-    road_width = st.slider("Estimated Road Width (px)", min_value=5, max_value=50, value=15)
-    
-    if uploaded_file is not None:
-        if st.session_state.get('last_uploaded') != uploaded_file.name or st.session_state.get('last_bbox') != bbox:
-            with st.spinner("Executing Mathematical Extraction & Georeferencing..."):
-                mask, skeleton, G = process_mask_to_graph(uploaded_file, road_width, bbox)
-                
-                st.session_state.baseline_graph = G
-                st.session_state.current_graph = copy.deepcopy(G)
-                st.session_state.baseline_eff = calculate_network_efficiency(G)
-                st.session_state.history_r = [1.0] 
-                st.session_state.nodes_removed = 0
-                st.session_state.last_uploaded = uploaded_file.name
-                st.session_state.last_bbox = bbox
-                
-                st.session_state.raw_mask = mask
-                st.session_state.skeleton = skeleton
+    if file:
+        if st.button("🚀 Re-Extract Infrastructure", use_container_width=True):
+            raw, heal, skel, G = process_mask_to_graph(file, bbox, bin_t, noise_m, hole_m, heal_d, merge_d)
+            st.session_state.update({"raw": raw, "heal": heal, "skel": skel, "G_base": G, "G_curr": copy.deepcopy(G), 
+                                    "eff_base": calculate_network_efficiency(G), "history": [1.0], "removed": 0})
 
     st.divider()
-    st.header("2. Simulation Controls")
+    st.header("3. Simulation Controls")
+    mode = st.radio("Ablation Strategy", ["Targeted (Gatekeepers)", "Random (Noise)"])
+    if st.button("🔥 Execute Ablation Step", type="primary", use_container_width=True):
+        if 'G_curr' in st.session_state and len(st.session_state.G_curr) > 1:
+            G_sim = st.session_state.G_curr
+            target = identify_gatekeepers(G_sim)[0][0][0] if mode == "Targeted (Gatekeepers)" else random.choice(list(G_sim.nodes()))
+            G_sim.remove_node(target)
+            st.session_state.removed += 1
+            st.session_state.history.append(calculate_network_efficiency(G_sim) / st.session_state.eff_base)
+
+# MAIN DASHBOARD
+if 'G_curr' in st.session_state:
+    st.subheader("🔍 Extraction Trace")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.image(st.session_state.raw, caption="1. Raw Mask", use_container_width=True)
+    c2.image(st.session_state.heal, caption="2. Healed Mask", use_container_width=True)
+    c3.image(st.session_state.skel, caption="3. Skeleton", use_container_width=True)
     
-    col_a, col_b = st.columns(2)
-    if col_a.button("🎯 Targeted Ablation", help="Removes the node with the highest betweenness centrality.") and 'current_graph' in st.session_state:
-        G_sim = st.session_state.current_graph
-        if len(G_sim) > 1:
-            gatekeepers, _ = identify_gatekeepers(G_sim)
-            if gatekeepers:
-                G_sim.remove_node(gatekeepers[0][0])
-                st.session_state.nodes_removed += 1
-                new_eff = calculate_network_efficiency(G_sim)
-                new_r = new_eff / st.session_state.baseline_eff if st.session_state.baseline_eff > 0 else 0
-                st.session_state.history_r.append(new_r)
-                
-    if col_b.button("🎲 Random Ablation", help="Removes a random node to simulate uncorrelated background failures.") and 'current_graph' in st.session_state:
-        G_sim = st.session_state.current_graph
-        if len(G_sim) > 1:
-            random_node = random.choice(list(G_sim.nodes()))
-            G_sim.remove_node(random_node)
-            st.session_state.nodes_removed += 1
-            new_eff = calculate_network_efficiency(G_sim)
-            new_r = new_eff / st.session_state.baseline_eff if st.session_state.baseline_eff > 0 else 0
-            st.session_state.history_r.append(new_r)
-                
-    if st.button("🔄 Reset Infrastructure", type="primary", use_container_width=True) and 'baseline_graph' in st.session_state:
-        st.session_state.current_graph = copy.deepcopy(st.session_state.baseline_graph)
-        st.session_state.history_r = [1.0]
-        st.session_state.nodes_removed = 0
-        st.rerun()
+    # Logic to show a basic plot of the graph for the 4th stage
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(5,5))
+    nx.draw(st.session_state.G_base, pos={n: (d['o'][1], -d['o'][0]) for n, d in st.session_state.G_base.nodes(data=True)}, 
+            node_size=10, node_color='red', edge_color='green', ax=ax)
+    ax.set_facecolor('black')
+    fig.patch.set_facecolor('black')
+    c4.pyplot(fig)
 
-# --- MAIN DASHBOARD ---
-if 'current_graph' in st.session_state:
-    
-    with st.expander("🔍 View Extraction Pipeline (Mask -> Skeleton)", expanded=False):
-        c1, c2 = st.columns(2)
-        c1.image(st.session_state.raw_mask, caption="Raw Binary Mask", use_container_width=True)
-        c2.image(st.session_state.skeleton, caption="Healed Topological Skeleton", use_container_width=True, clamp=True)
-        
-    col1, col2, col3 = st.columns(3)
-    current_r = st.session_state.history_r[-1]
-    col1.metric("Resilience Index (R)", f"{current_r:.3f}", f"{(current_r - 1.0)*100:.1f}%")
-    col2.metric("Nodes Ablated (Destroyed)", st.session_state.nodes_removed)
-    col3.metric("Remaining Network Size", len(st.session_state.current_graph.nodes))
-
-    gatekeepers, centrality_map = identify_gatekeepers(st.session_state.current_graph)
-    
-    # Center map based on bounding box inputs
-    map_center = [(bbox['lat_max'] + bbox['lat_min']) / 2, (bbox['lon_max'] + bbox['lon_min']) / 2]
-
-    # Using standard OpenStreetMap tiles as requested
-    m = folium.Map(location=map_center, zoom_start=14, tiles="OpenStreetMap")
-
-    for u, v, data in st.session_state.current_graph.edges(data=True):
-        if 'pos' in st.session_state.current_graph.nodes[u] and 'pos' in st.session_state.current_graph.nodes[v]:
-            pos_u = st.session_state.current_graph.nodes[u]['pos']
-            pos_v = st.session_state.current_graph.nodes[v]['pos']
-            folium.PolyLine([pos_u, pos_v], color="#111111", weight=3, opacity=0.9).add_to(m)
-
-    for node, data in st.session_state.current_graph.nodes(data=True):
-        if 'pos' in data:
-            c_score = centrality_map.get(node, 0)
-            # Color gradient from blue (low) to red (high centrality)
-            color = f"rgb({int(255 * c_score * 5)}, {100}, {int(255 * (1 - c_score * 5))})" 
-            if c_score * 5 > 1: color = "red" 
-            
-            folium.CircleMarker(
-                location=data['pos'],
-                radius=4 + (c_score * 30), 
-                color=color,
-                fill=True,
-                fill_color=color,
-                fill_opacity=1.0,
-                popup=f"Node: {node}<br>Centrality: {c_score:.4f}"
-            ).add_to(m)
-
-    col_map, col_chart = st.columns([2, 1])
-    with col_map:
-        st.markdown("### Georeferenced Structural Intelligence Heatmap")
-        st_folium(m, width=700, height=500, returned_objects=[])
-    with col_chart:
-        st.markdown("### Percolation Phase Transition")
-        st.line_chart(st.session_state.history_r, height=400, y_label="Resilience Index (R)")
-else:
-    st.info("👈 Please upload a binary mask in the sidebar to initiate the extraction pipeline.")
+    st.divider()
+    m_col, c_col = st.columns([2, 1])
+    with m_col:
+        st.markdown("### Heatmap")
+        gates, c_map = identify_gatekeepers(st.session_state.G_curr)
+        m = folium.Map(location=[(bbox['lat_max']+bbox['lat_min'])/2, (bbox['lon_max']+bbox['lon_min'])/2], zoom_start=15, tiles="OpenStreetMap")
+        for u, v, d in st.session_state.G_curr.edges(data=True):
+            folium.PolyLine([st.session_state.G_curr.nodes[u]['pos'], st.session_state.G_curr.nodes[v]['pos']], color="black", weight=2).add_to(m)
+        for n, d in st.session_state.G_curr.nodes(data=True):
+            score = c_map.get(n, 0)
+            folium.CircleMarker(d['pos'], radius=3+(score*30), color="red" if score*5>1 else "blue", fill=True).add_to(m)
+        st_folium(m, width=700, height=500)
+    with c_col:
+        st.markdown("### Transition")
+        st.line_chart(st.session_state.history, y_label="Resilience Index (R)")
