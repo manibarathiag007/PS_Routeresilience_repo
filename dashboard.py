@@ -169,6 +169,17 @@ if 'G_curr' in st.session_state:
         st.markdown("### Heatmap")
         gates, c_map = identify_gatekeepers(st.session_state.G_curr)
         m = folium.Map(location=[(bbox['lat_max']+bbox['lat_min'])/2, (bbox['lon_max']+bbox['lon_min'])/2], zoom_start=15, tiles="OpenStreetMap")
+        dark_mode_css = """
+        <style>
+        .leaflet-tile {
+            filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+        }
+        </style>
+        """
+        m.get_root().html.add_child(folium.Element(dark_mode_css))
+        # ------------------------------------------------------------------------
+
+        for u, v, d in st.session_state.G_curr.edges(data=True):
         for u, v, d in st.session_state.G_curr.edges(data=True):
             folium.PolyLine([st.session_state.G_curr.nodes[u]['pos'], st.session_state.G_curr.nodes[v]['pos']], color="black", weight=2).add_to(m)
         for n, d in st.session_state.G_curr.nodes(data=True):
