@@ -8,7 +8,7 @@ from skimage import morphology, io
 import sknw
 import matplotlib.pyplot as plt
 import itertools
-
+import matplotlib.colors as mcolors
 # =========================================================
 # 0. INITIALIZE UI FIRST
 # =========================================================
@@ -223,26 +223,40 @@ if 'current_graph' in st.session_state:
             color='#ffffff', weight=1, fill=False, opacity=0.3
         ).add_to(m)
 
+    # --- RENDER GRADIENT FLOW EDGES ---
+    cmap = plt.get_cmap('coolwarm')
+    norm = mcolors.Normalize(vmin=0, vmax=0.2)
+
     for u, v, data in st.session_state.current_graph.edges(data=True):
         if 'pos' in st.session_state.current_graph.nodes[u] and 'pos' in st.session_state.current_graph.nodes[v]:
             pos_u = st.session_state.current_graph.nodes[u]['pos']
             pos_v = st.session_state.current_graph.nodes[v]['pos']
-            folium.PolyLine([pos_u, pos_v], color="#444444", weight=2, opacity=0.8).add_to(m)
-
-    for node, data in st.session_state.current_graph.nodes(data=True):
-        if 'pos' in data:
-            c_score = centrality_map.get(node, 0)
-            color = f"rgb({int(255 * c_score * 5)}, {100}, {int(255 * (1 - c_score * 5))})" 
-            if c_score * 5 > 1: color = "red" 
             
+            # Calculate average centrality of the two nodes to determine edge color
+            c_u = centrality_map.get(u, 0)
+            c_v = centrality_map.get(v, 0)
+            avg_c = (c_u + c_v) / 2
+            
+            # Convert to hex color
+            color = mcolors.to_hex(cmap(norm(avg_c)))
+            
+            # Use a thicker weight for high-centrality "artery" roads
+            folium.PolyLine(
+                [pos_u, pos_v], 
+                color=color, 
+                weight=5 + (avg_c * 50), 
+                opacity=0.9
+            ).add_to(m)
+
+    # Keep small white indicators only for highly critical intersections (nodes)
+    for node, data in st.session_state.current_graph.nodes(data=True):
+        if 'pos' in data and centrality_map.get(node, 0) > 0.05:
             folium.CircleMarker(
                 location=data['pos'],
-                radius=3 + (c_score * 30), 
-                color=color,
+                radius=2,
+                color="white",
                 fill=True,
-                fill_color=color,
-                fill_opacity=0.9,
-                popup=f"Node: {node}<br>Centrality: {c_score:.4f}"
+                fill_opacity=0.5
             ).add_to(m)
 
     col_map, col_chart = st.columns([2, 1])
