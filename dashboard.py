@@ -207,6 +207,7 @@ if 'G_curr' in st.session_state:
         ).add_to(m)
                 
         # 4. Draw Nodes (Gatekeepers) over the mask
+        # 4. Draw Nodes (Gatekeepers) over the mask
         for n, d in st.session_state.G_curr.nodes(data=True):
             if 'pos' in d:
                 score = c_map.get(n, 0)
@@ -215,7 +216,8 @@ if 'G_curr' in st.session_state:
                     radius=3+(score*30), 
                     color="red" if score*5>1 else "blue", 
                     fill=True,
-                    fill_opacity=0.9
+                    fill_opacity=0.2,  # Restored to the translucent look
+                    opacity=0.8        # Keeps the outer border just sharp enough
                 ).add_to(m)
                 
         st_folium(m, width=700, height=500)
