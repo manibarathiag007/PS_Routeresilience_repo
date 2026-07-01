@@ -168,7 +168,11 @@ if 'G_curr' in st.session_state:
     with m_col:
         st.markdown("### Heatmap")
         gates, c_map = identify_gatekeepers(st.session_state.G_curr)
+        
+        # 1. Base Map
         m = folium.Map(location=[(bbox['lat_max']+bbox['lat_min'])/2, (bbox['lon_max']+bbox['lon_min'])/2], zoom_start=15, tiles="OpenStreetMap")
+        
+        # 2. Dark Mode CSS Injection
         dark_mode_css = """
         <style>
         .leaflet-tile {
@@ -177,14 +181,18 @@ if 'G_curr' in st.session_state:
         </style>
         """
         m.get_root().html.add_child(folium.Element(dark_mode_css))
-        # ------------------------------------------------------------------------
-
+        
+        # 3. Draw Edges (Changed to white so they show up on the dark map)
         for u, v, d in st.session_state.G_curr.edges(data=True):
-        for u, v, d in st.session_state.G_curr.edges(data=True):
-            folium.PolyLine([st.session_state.G_curr.nodes[u]['pos'], st.session_state.G_curr.nodes[v]['pos']], color="black", weight=2).add_to(m)
+            if 'pos' in st.session_state.G_curr.nodes[u] and 'pos' in st.session_state.G_curr.nodes[v]:
+                folium.PolyLine([st.session_state.G_curr.nodes[u]['pos'], st.session_state.G_curr.nodes[v]['pos']], color="#dddddd", weight=2).add_to(m)
+                
+        # 4. Draw Nodes
         for n, d in st.session_state.G_curr.nodes(data=True):
-            score = c_map.get(n, 0)
-            folium.CircleMarker(d['pos'], radius=3+(score*30), color="red" if score*5>1 else "blue", fill=True).add_to(m)
+            if 'pos' in d:
+                score = c_map.get(n, 0)
+                folium.CircleMarker(d['pos'], radius=3+(score*30), color="red" if score*5>1 else "blue", fill=True).add_to(m)
+                
         st_folium(m, width=700, height=500)
     with c_col:
         st.markdown("### Transition")
